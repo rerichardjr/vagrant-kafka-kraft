@@ -10,7 +10,6 @@ This repository contains a **Vagrantfile** designed to provision a Kafka cluster
   - [Installing Vagrant](#installing-vagrant)
 - [Configuration](#configuration)
 - [Usage](#usage)
-- [Add-ons](#add-ons)
 - [Folder Structure](#folder-structure)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
@@ -78,12 +77,6 @@ brew install --cask vagrant
 
 ## Configuration
 All configuration options are managed through the `settings.yaml` file.
-
-### Example `settings.yaml`:
-```yaml
-install_addons: true
-```
-- **install_addons:** Set to `true` to install Helm, Rancher, Cert Manager, and Longhorn automatically. Set to `false` to skip add-on installation.
 
 ## Usage
 1. Clone the repository:
