@@ -15,7 +15,7 @@ This repository contains a **Vagrantfile** designed to provision a Kafka cluster
 - [License](#license)
 
 ## Features
-- Automated deployment of an RKE2 cluster using Vagrant and VirtualBox.
+- Automated deployment of a Kafka cluster using Vagrant and VirtualBox.
 - **KRaft Mode:** Kafka operates natively without ZooKeeper, simplifying cluster management.  
 - **Multi-Node Cluster:** Provisions multiple Kafka broker nodes to simulate a real cluster environment.  
 - Configurable settings via `settings.yaml`.
