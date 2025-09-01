@@ -12,7 +12,6 @@ This repository provisions a multi-node Kafka cluster running in **KRaft (Kafka 
 - [Usage](#usage)
 - [Validation](#validation)
 - [Cleanup](#cleanup)
-- [Folder Structure](#folder-structure)
 - [License](#license)
 
 ---
@@ -128,3 +127,4 @@ vagrant destroy -f
 This project is licensed under the [MIT License](LICENSE).
 
 ---
+
