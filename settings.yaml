@@ -1,17 +1,20 @@
 ---
-hosts:
+host:
+  hostname: node
   count: 3
   cpu: 1
   memory: 1024
 ip:
-  network: '192.168.50.'
-  host_start: 40
+  network: '192.168.3'
+  start: 40
   domain: 'test.local'
+support_user: support
 configs:
   run_as_user: kafka
   install_folder: /opt/kafka
   log_folder: /var/log/kafka
+bridge: "enp6s0f0"
 software:
-  box: bento/ubuntu-22.04
+  box: bento/ubuntu-24.04
   scala: 2.13
-  kafka: 3.8.0
+  kafka: 3.9.1

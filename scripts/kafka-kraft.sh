@@ -2,83 +2,66 @@
 
 set -euxo pipefail
 
-KAFKA_INSTALLER=kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz
-KAFKA_SERVER_PROPERTIES=${INSTALL_FOLDER}/config/kraft/server.properties
-KAFKA_CLUSTER_ID_FILE=/vagrant/kafka_cluster_id.txt
-KAFKA_PASSWORD_FILE=/vagrant/password.txt
-KAFKA_SERVICE=/etc/systemd/system/kafka.service
+source "$(dirname "$0")/lib.sh"
 
-# install java jdk
-wget -O - https://apt.corretto.aws/corretto.key | sudo gpg --dearmor -o /usr/share/keyrings/corretto-keyring.gpg && \
-echo "deb [signed-by=/usr/share/keyrings/corretto-keyring.gpg] https://apt.corretto.aws stable main" | sudo tee /etc/apt/sources.list.d/corretto.list
-sudo apt-get -y update
-sudo apt-get -y install java-11-amazon-corretto-jdk
+BASE_URL="https://downloads.apache.org/kafka/${KAFKA_VERSION}"
+KAFKA_INSTALLER="kafka_${SCALA_VERSION}-${KAFKA_VERSION}.tgz"
+CHECKSUM_ALGO=sha512
+KAFKA_CHECKSUM="${KAFKA_INSTALLER}.${CHECKSUM_ALGO}"
+SHARED_FOLDER="/vagrant"
+STAGE_FOLDER="${SHARED_FOLDER}/stage"
+SERVER_PROPERTIES="${INSTALL_FOLDER}/config/kraft/server.properties"
 
-# populate /etc/hosts file
-for i in `seq 1 ${NODE_COUNT}`; do
-    echo "$NETWORK$((HOST_START+i)) node${i}.$DOMAIN" >> /etc/hosts
-done
 
-# create user
-sudo useradd ${RUN_AS_USER} -G sudo -m -s /bin/bash
-if [ ! -f $KAFKA_PASSWORD_FILE ]; then
-  RANDOM_PW=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 8; echo)
-  echo $RANDOM_PW > $KAFKA_PASSWORD_FILE
-fi
+installKafka() {
+  sudo mkdir ${INSTALL_FOLDER} ${LOG_FOLDER}
+  sudo chown ${RUN_AS_USER}:${RUN_AS_USER} ${INSTALL_FOLDER} ${LOG_FOLDER}
+  sudo -u ${RUN_AS_USER} tar xzf "${STAGE_FOLDER}/${KAFKA_INSTALLER}" -C ${INSTALL_FOLDER} --strip 1
+}
 
-RANDOM_PW=$(cat $KAFKA_PASSWORD_FILE)
-echo "$RUN_AS_USER:$RANDOM_PW" | sudo chpasswd
+createKafkaServerProperties() {
+  local quorum_voters
 
-# download kafka if not already staged
-if [ ! -f /tmp/$KAFKA_INSTALLER ]; then
-  echo "Kafka installer not found"
-  sudo -u ${RUN_AS_USER} wget https://downloads.apache.org/kafka/${KAFKA_VERSION}/$KAFKA_INSTALLER -O /tmp/$KAFKA_INSTALLER
-fi
+  quorum_voters=$(printf "%s," $(seq 1 "$NODE_COUNT" | xargs -I{} echo "{}@${HOSTNAME}{}.${DOMAIN}:9093"))
+  quorum_voters=${quorum_voters%,}  # remove trailing comma
 
-# install kafka
-sudo mkdir ${INSTALL_FOLDER} ${LOG_FOLDER}
-sudo chown ${RUN_AS_USER}:${RUN_AS_USER} ${INSTALL_FOLDER} ${LOG_FOLDER}
-sudo -u ${RUN_AS_USER} tar xzf /tmp/$KAFKA_INSTALLER -C ${INSTALL_FOLDER} --strip 1
+  sudo -u ${RUN_AS_USER} mv $SERVER_PROPERTIES $SERVER_PROPERTIES.orig
 
-# create kafka server.properties
-# build list of hosts for the controller.quorum.voters configuration parameter
-for i in `seq 1 ${NODE_COUNT}`; do
-  if [ $i -eq 1 ]; then
-    CONTROLLER_QUORUM_VOTERS="$i@node$i.$DOMAIN:9093"
-  else
-    CONTROLLER_QUORUM_VOTERS="$CONTROLLER_QUORUM_VOTERS,$i@node$i.$DOMAIN:9093"
-  fi
-done
-
-sudo -u ${RUN_AS_USER} mv $KAFKA_SERVER_PROPERTIES $KAFKA_SERVER_PROPERTIES.orig
-if [ ! -f $KAFKA_SERVER_PROPERTIES ]; then
-  sudo -u ${RUN_AS_USER} cat > $KAFKA_SERVER_PROPERTIES <<EOF
+  if [ ! -f $SERVER_PROPERTIES ]; then
+    sudo -u ${RUN_AS_USER} cat > $SERVER_PROPERTIES <<EOF
 process.roles=broker,controller
-node.id=$NODE_ID
-controller.quorum.voters=$CONTROLLER_QUORUM_VOTERS
-listeners=PLAINTEXT://$HOSTNAME.$DOMAIN:9092,CONTROLLER://$HOSTNAME.$DOMAIN:9093
+node.id=${NODE_ID}
+controller.quorum.voters=${quorum_voters}
+listeners=PLAINTEXT://${HOSTNAME}${NODE_ID}.${DOMAIN}:9092,CONTROLLER://${HOSTNAME}${NODE_ID}.${DOMAIN}:9093
 inter.broker.listener.name=PLAINTEXT
-advertised.listeners=PLAINTEXT://$HOSTNAME.$DOMAIN:9092
+advertised.listeners=PLAINTEXT://${HOSTNAME}${NODE_ID}.${DOMAIN}:9092
 controller.listener.names=CONTROLLER
 listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,SSL:SSL,SASL_PLAINTEXT:SASL_PLAINTEXT,SASL_SSL:SASL_SSL
 log.dirs=${LOG_FOLDER}/kraft-combined-logs
-num.partitions=3
+num.partitions=${NODE_COUNT}
 auto.create.topics.enable=false
 EOF
 fi
+}
 
-# generate id for cluster
-if [ $HOSTNAME == "node1" ]; then
-  # if node1, create cluster id and save id so other vms can access
-  sudo -u ${RUN_AS_USER} ${INSTALL_FOLDER}/bin/kafka-storage.sh random-uuid > $KAFKA_CLUSTER_ID_FILE 
-fi
+generateClusterID() {
+  local id_file="${SHARED_FOLDER}/files/cluster_id.txt"
+  local cluster_id
 
-KAFKA_CLUSTER_ID=$(cat $KAFKA_CLUSTER_ID_FILE)
-sudo -u ${RUN_AS_USER} ${INSTALL_FOLDER}/bin/kafka-storage.sh format -t $KAFKA_CLUSTER_ID -c ${INSTALL_FOLDER}/config/kraft/server.properties
+  if [ "$NODE_ID" -eq 1 ]; then
+    # if first node, create cluster id and save id so other vms can access
+    sudo -u ${RUN_AS_USER} ${INSTALL_FOLDER}/bin/kafka-storage.sh random-uuid > $id_file 
+  fi
 
-# create kafka service
-if [ ! -f $KAFKA_SERVICE ]; then
-  cat > $KAFKA_SERVICE <<EOF
+  cluster_id=$(cat $id_file)
+  sudo -u ${RUN_AS_USER} ${INSTALL_FOLDER}/bin/kafka-storage.sh format -t $cluster_id -c ${SERVER_PROPERTIES}
+}
+
+createKafkaService() {
+  local kafka_service="/etc/systemd/system/kafka.service"
+
+  if [ ! -f $kafka_service ]; then
+    cat > $kafka_service <<EOF
 [Unit]
 Description=Kafka Service
 Requires=network.target
@@ -88,9 +71,11 @@ StartLimitBurst=25
 
 [Service]
 Type=simple
-User=kafka 
-ExecStart=/bin/sh -c '${INSTALL_FOLDER}/bin/kafka-server-start.sh ${INSTALL_FOLDER}/config/kraft/server.properties > ${LOG_FOLDER}/kafka.log 2>&1'
+User=${RUN_AS_USER}
+ExecStart=${INSTALL_FOLDER}/bin/kafka-server-start.sh ${INSTALL_FOLDER}/config/kraft/server.properties
 ExecStop=${INSTALL_FOLDER}/bin/kafka-server-stop.sh
+StandardOutput=append:${LOG_FOLDER}/kafka.log
+StandardError=append:${LOG_FOLDER}/kafka.err
 Restart=on-failure
 RestartSec=5s
 
@@ -98,13 +83,16 @@ RestartSec=5s
 WantedBy=multi-user.target
 EOF
 fi
+}
 
-# enable and start kafka service
-sudo systemctl enable kafka
-sudo systemctl start kafka
-
-# add install folder path to vagrant users env
-echo 'export PATH="$PATH:'${INSTALL_FOLDER}'/bin"' >> .bashrc
-
-echo '##############################################################'
-echo  ${RUN_AS_USER}' user password is '$RANDOM_PW
+createServiceAccount ${RUN_AS_USER} ${RUN_AS_USER}
+installCorretto
+downloadFile ${BASE_URL} ${KAFKA_INSTALLER} ${STAGE_FOLDER}
+downloadFile ${BASE_URL} ${KAFKA_CHECKSUM} ${STAGE_FOLDER}
+gpgVerify ${STAGE_FOLDER} ${KAFKA_INSTALLER} ${KAFKA_CHECKSUM} ${CHECKSUM_ALGO}
+installKafka
+createKafkaServerProperties
+generateClusterID
+createKafkaService
+startService kafka
+updateProfilePath "${INSTALL_FOLDER}/bin" "kafka-bin-path.sh"
